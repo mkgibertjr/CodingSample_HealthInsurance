@@ -42,6 +42,7 @@ I am writing this document as a coding sample submission to demonstrate the foll
 * Transferable comfort with organized data (rows x columns) of any kind
 * Statistical Data Analysis of categorical and continuous variables
 * Competency in R
+* Version control with Git and Github
 * Reproducible research using RMarkdown
 * Use of statistical regression (Simple and multiple)
 * Data Visualization
@@ -60,7 +61,7 @@ These data include patient information across seven variables:
 * Region (of Service)
 * Charges (Healthcare costs)
 
-The repository and relevant materials for this project can be downloaded from [here](https://github.com/mkgibertjr/HealthInsurance_Example/archive/refs/heads/main.zip)
+The repository and relevant materials for this project can be downloaded from [here](https://github.com/mkgibertjr/CodingSample_HealthInsurance/archive/refs/heads/main.zip)
 
 While I'm using health insurance data for this example, I am able to perform a similar analysis on any data set to answer similar questions in any field. 
 
@@ -721,7 +722,7 @@ Depending on the needs of stakeholders, this model could be used as is or could 
 
 ## Correspondence
 
-Please address any questions to Myron Keith Gibert Jr at [mkgibertjr@msn.com](mailto:mkgibertjr@msn.com).  Code for this project is stored in a [GitHub repository](https://github.com/mkgibertjr/HealthInsurance_Example).
+Please address any questions to Myron Keith Gibert Jr at [mkgibertjr@msn.com](mailto:mkgibertjr@msn.com).  Code for this project is stored in a [GitHub repository](https://github.com/mkgibertjr/CodingSample_HealthInsurance).
 
 
 
