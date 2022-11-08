@@ -1,0 +1,399 @@
+---
+title: "Predicting High Healthcare Costs"
+author: "Myron Keith Gibert Jr"
+date: "2022-11-07"
+output: pdf_document
+urlcolor: cyan
+linkcolor: cyan
+header-includes:
+- \usepackage{hyperref}
+- \hypersetup{
+    colorlinks=true,
+    filecolor=magenta,      
+    pdfpagemode=FullScreen,
+    }
+toc: TRUE
+---
+
+\thispagestyle{empty}
+\clearpage
+\pagenumbering{arabic} 
+\pagebreak
+
+```{r tinytex, include=FALSE}
+## INSTALLING LATEX FOR RMARKDOWN
+#RMarkdown requires LaTex to create pdf documents as an output. More information can be found [here](https://bookdown.org/yihui/rmarkdown/pdf-document.html). Alternatively, output can be set to "html_document" or "word_document". End users may install LaTex by setting the "wanttinytex" variable to FALSE and running the following script:
+#Install tinytex to let RMarkdown create a pdf document? Default: wanttinytex <- FALSE
+wanttinytex <- TRUE
+if(wanttinytex == TRUE){
+if(tinytex:::is_tinytex()==FALSE && wanttinytex == TRUE){
+  if (!require("tinytex")) install.packages("tinytex")
+  tinytex::install_tinytex()
+  tinytex:::install_prebuilt()}
+library("tinytex")
+#tlmgr_install("fvextra")
+}
+```
+
+# Introduction
+
+
+
+Data for this project can be found at: 
+
+## Setup
+
+Sets chunk options. Installs packages (if needed) and then loads them into R.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("tidyverse")) install.packages("tidyverse")
+library("tidyverse")
+
+if (!require("ggplot2")) install.packages("ggplot2")
+library("ggplot2")
+
+if (!require("ggthemes")) install.packages("ggthemes")
+library("ggthemes")
+
+if (!require("rlang")) install.packages("rlang")
+library("rlang")
+
+if (!require("ggcorrplot")) install.packages("ggcorrplot")
+library(ggcorrplot)
+
+if (!require("tidymodels")) install.packages("tidymodels")
+library("tidymodels")
+
+if (!require("reshape2")) install.packages("reshape2")
+library("reshape2")
+
+```
+
+## Read In data
+
+The data is in .csv format, so we'll load in using read.csv
+
+```{r readdata}
+
+# Read in the csv file.  Set the first line of the file as the header for the table
+
+data <- read.csv("insurance.csv",header=TRUE)
+
+head(data,5)
+
+```
+
+I want age, bmi, children, and charges to be numeric, so let's convert them.
+
+```{r data_numeric}
+
+data_fixed <- data %>%
+        mutate(age = as.numeric(age),
+               bmi = as.numeric(bmi),
+               children = as.numeric(children),
+               charges = as.numeric(charges))
+
+sapply(data_fixed,class)
+
+```
+
+# Exploring whether any variable strongly correlates with high patient expenses.
+
+## Simple correlation plot
+
+```{r simplecor}
+
+corrdata <- model.matrix(~0+., data=data_fixed) %>% 
+  cor(use="pairwise.complete.obs") 
+
+reorder_cormat <- function(x){
+dd <- as.dist((1-x)/2)
+hc <- hclust(dd)
+x <-x[hc$order, hc$order]
+}
+
+corrdata <- reorder_cormat(corrdata)
+
+### Get lower triangle of the correlation matrix
+get_lower_tri<-function(cormat){
+  cormat[upper.tri(cormat)] <- NA
+  return(cormat)
+}
+### Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+  cormat[lower.tri(cormat)]<- NA
+  return(cormat)
+}
+
+lower_tri <- get_lower_tri(corrdata)
+  
+### Melt
+corrdata_tall <- melt(lower_tri, na.rm = TRUE)
+
+p <- ggplot(corrdata_tall,aes(Var1,Var2,fill=as.numeric(value))) +
+  geom_tile() +
+  geom_text(size=rel(2.0),aes(label=round(as.numeric(value),2))) +
+  ggtitle("Pearson correlation of Health Insurance Variables") +
+  theme_light() +
+  scale_color_colorblind() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme(axis.text.x=element_text(size=rel(1.2),angle = 90, vjust = 0.5, hjust = 1),
+        plot.title = element_text(size=rel(1.0),hjust = 0.5),
+        axis.title=element_blank()) +
+  coord_fixed()
+  
+p
+
+```
+
+Being a smoker is very likely to result in higher health costs.  Age and BMI have weaker correlations. Let's take a look at some combinations!
+
+## Multiple correlation plot (Smoker+Other Variables)
+
+```{r age,warning=FALSE,message=FALSE,fig.width=10,fig.height=5}
+
+corrdata <- model.matrix(~0+., data=data_fixed) %>% 
+  cor(use="pairwise.complete.obs")
+
+## Using the model matrix function. ~ to set comparison, 0+ to include intercept (omit if not needed), and "." to indicate that we wish to compare all variables.
+
+model.matrix(~0+charges*age*bmi*smoker, data=data_fixed) %>% 
+  cor(use="pairwise.complete.obs") %>% 
+  ggcorrplot(show.diag = F, type="lower", lab=TRUE, lab_size=2)
+
+```
+
+Having a high BMI while being a older smoker seems to correlate very highly with having high health costs.  However, these variables might not be worth including over just looking at smoking alone, since it only leads to a slight increase in the correlation. 
+
+Let's use regression modeling using the three variables (age,bmi,smoker status) and compare the model to a simple regression model for smoker status alone to see if using all three is actually better.
+
+# Modeling Healthcare costs using Age, BMI, and Smoker status and comparing to Simple Regression using only Smoker status.
+
+## Split data into testing and training sets
+
+```{r splitdata}
+
+set.seed(1234)
+
+data_subset_split <- initial_split(data_fixed,prop=0.80)
+
+data_subset_training <- training(data_subset_split) 
+
+```
+
+## Construct a multiple regression model using Age, BMI, and Smoker status to predict cost
+
+```{r modeldesign}
+
+lm_model <- linear_reg() %>% 
+            set_engine('lm') %>% # adds lm implementation of linear regression
+            set_mode('regression')
+
+lm_fit <- lm_model %>% 
+          fit(charges ~ age+bmi+smoker, data = data_subset_training)
+
+fitdata <- tidy(lm_fit)
+
+fitdata
+
+```
+
+# Test model 
+
+```{r testmodel}
+
+data_subset_testing <- testing(data_subset_split)
+
+charge_predictions_train <- predict(lm_fit,new_data = data_subset_training)
+
+charge_test_results_train <- data_subset_training %>% 
+  dplyr::select(age,bmi,smoker,charges) %>% 
+  bind_cols(charge_predictions_train)
+
+charge_predictions_test <- predict(lm_fit,new_data = data_subset_testing)
+
+charge_test_results_test <- data_subset_testing %>% 
+  dplyr::select(age,bmi,smoker,charges) %>% 
+  bind_cols(charge_predictions_test)
+
+```
+
+## Write Equation to Extract Regression Equation
+
+```{r}
+
+extract_eq <- function(lm_fit,digits){
+        fitdata <- tidy(lm_fit) %>%
+                mutate(operator = ifelse(estimate >= 0,"+","-"),
+                       variable = ifelse(term == "(Intercept)","","x"))
+        
+        equation_result <- "y = "
+        
+        i <- 1
+        
+        for(i in 1:length(fitdata$term)){
+        
+        equation_result <- paste(equation_result,fitdata$operator[i],round(abs(fitdata$estimate[i]),digits),fitdata$variable[i]," ",sep="")
+                
+        }
+                
+        equation_result
+}
+
+reg_equation <- extract_eq(lm_fit,3)
+
+```
+
+
+# Evaluate Model
+
+## Visualize Predicted vs Actual Results on the Testing Set
+
+```{r predvsactual_test,message=FALSE,fig.width=10,fig.height=5}
+
+p <- ggplot(charge_test_results_test,(aes(.pred,charges))) +
+  geom_point() +
+  geom_smooth(method = lm, se = FALSE) + 
+  xlab("Testing Dataset Charges predicted by model") + 
+  ylab(expression("Actual Testing Dataset Charges")) +
+  ggtitle("Multiple Regression Model fits the TEST data trend, but may struggle with higher cost predictions") +
+  theme_light() +
+  scale_color_colorblind() +
+  scale_fill_colorblind() +
+  theme(axis.text.x=element_text(size=rel(1.2),angle = 90, vjust = 0.5, hjust = 1),
+        plot.title = element_text(size=rel(1.0),hjust = 0.5),
+        legend.position = "none") + 
+annotate('text', label=reg_equation, x=-Inf, y=Inf, hjust=0, vjust=1,color="red")
+
+p
+
+```
+
+## RMSE
+
+```{r evaluate model}
+
+rmse_train <- charge_test_results_train %>% 
+  rmse(truth = charges, estimate = .pred) %>%
+  mutate(dataset = "train") %>%
+  dplyr::select(dataset,.estimate)
+
+rmse_test <- charge_test_results_test %>% 
+  rmse(truth = charges, estimate = .pred) %>%
+  mutate(dataset = "test") %>%
+  dplyr::select(dataset,.estimate)        
+
+rmse_combined <- rbind(rmse_train,rmse_test) %>%
+  mutate(dataset = fct_relevel(dataset,"train", "test"))
+
+```
+
+```{r summary stats}
+
+summary_stats_train <- charge_test_results_train %>% 
+  summarize(dataset = "train",average = mean(charges,na.rm=TRUE),median = median(charges,na.rm=TRUE),standdev = sd(charges,na.rm=TRUE)) 
+
+summary_stats_test <- charge_test_results_test %>% 
+  summarize(dataset = "test",average = mean(charges,na.rm=TRUE),median = median(charges,na.rm=TRUE),standdev = sd(charges,na.rm=TRUE)) 
+
+summary_stats <- rbind(summary_stats_train,summary_stats_test)
+
+```
+
+```{r rmse_combined}
+
+rmse_combined <- rmse_combined %>%
+        left_join(summary_stats,by="dataset") %>%
+        dplyr::mutate(diff = .estimate / standdev) %>%
+  mutate(dataset = fct_relevel(dataset,"train", "test"))
+
+```
+
+
+```{r rmse_plot,message=FALSE,fig.width=10,fig.height=5}
+
+p <- ggplot(rmse_combined,(aes(dataset,diff,fill=dataset,color=dataset))) +
+  geom_bar(stat="identity",position="dodge") +
+  xlab("Dataset") + 
+  ylab(expression("RMSE Value / Standard Deviation")) +
+  ggtitle("Multiple Regression Model has less variance for testing set than training set") +
+  theme_light() +
+  scale_color_colorblind() +
+  scale_fill_colorblind() +
+  theme(axis.text.x=element_text(size=rel(1.2),angle = 90, vjust = 0.5, hjust = 1),
+        plot.title = element_text(size=rel(1.0),hjust = 0.5),
+        legend.position = "none")
+
+p
+
+```
+
+## R-Squared
+
+### Construct a simple regression model using Smoker status to predict cost
+
+```{r modeldesign_smoker}
+
+lm_model <- linear_reg() %>% 
+            set_engine('lm') %>% # adds lm implementation of linear regression
+            set_mode('regression')
+
+lm_fit <- lm_model %>% 
+          fit(charges ~ smoker, data = data_subset_training)
+
+fitdata <- tidy(lm_fit)
+
+fitdata
+
+charge_predictions_smoker <- predict(lm_fit,new_data = data_subset_testing)
+
+rsq_smoker <- data_subset_testing %>% 
+  dplyr::select(smoker,charges) %>%
+  bind_cols(charge_predictions_smoker) %>% 
+  rsq(truth = charges, estimate = .pred) %>%
+  mutate(dataset = "Test (Smoker only)") %>%
+  dplyr::select(dataset,.estimate)
+
+```
+
+### Compare Smoking to Multivariate Model for Healthcare Costs using R-Squared Method
+
+```{r r-squared_plot,message=FALSE,fig.width=10,fig.height=5}
+
+rsq_train <- charge_test_results_train %>% 
+  rsq(truth = charges, estimate = .pred) %>%
+  mutate(dataset = "Train") %>%
+  dplyr::select(dataset,.estimate)
+
+rsq_test <- charge_test_results_test %>% 
+  rsq(truth = charges, estimate = .pred) %>%
+  mutate(dataset = "Test") %>%
+  dplyr::select(dataset,.estimate)        
+
+rsq_combined <- rbind(rsq_train,rsq_test,rsq_smoker) %>%
+  mutate(dataset = fct_relevel(dataset,"Train", "Test","Test (Smoker only)"))
+
+p <- ggplot(rsq_combined,(aes(dataset,.estimate,fill=dataset,color=dataset))) +
+  geom_bar(stat="identity",position="dodge") +
+  xlab("Dataset") + 
+  ylab(expression("R-Squared Value")) +
+  ggtitle("Multiple Regression Model explains more data variance than training dataset and smoking model") +
+  theme_light() +
+  scale_color_colorblind() +
+  scale_fill_colorblind() +
+  theme(axis.text.x=element_text(size=rel(1.2),angle = 90, vjust = 0.5, hjust = 1),
+        plot.title = element_text(size=rel(1.0),hjust = 0.5),
+        legend.position = "none")
+
+p
+
+```
+
+# Conclusions
+
+
+
